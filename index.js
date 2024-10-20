@@ -1,37 +1,83 @@
+const path = require('path');
 const { program } = require('commander');
+const fs = require('fs').promises;
 const http = require('http');
-const fs = require('fs');
 
-// Визначаємо обов'язкові параметри
+// Налаштування параметрів командного рядка
 program
-    .option('-h, --host <host>', 'Address of server')
-    .option('-p, --port <port>', 'Server port')
-    .option('-c, --cache <directory>', 'Directory path to store cached data');
+  .option('-h, --host <host>', 'Адреса сервера')
+  .option('-p, --port <port>', 'Порт сервера')
+  .option('-c, --cache <cache>', 'Директорія для кешування');
 
-// Парсимо командні аргументи
+const options = program.opts(); // Зберігаємо options тут
+
 program.parse(process.argv);
 
-// Отримуємо параметри
-const options = program.opts();
-
-// Перевірка на наявність обов'язкових параметрів
+// Перевірка параметрів
 if (!options.host || !options.port || !options.cache) {
-    console.error('Error: Missing required options. Please provide host, port, and cache directory.');
-    process.exit(1); // Вихід з процесу з кодом помилки
+  console.error('Invalid options. Please provide host, port, and cache directory.');
+  process.exit(1);
 }
 
-// Створюємо обробник запитів
-const requestListener = function (req, res) {
-    console.log(`Received request for ${req.url}`);
-    res.writeHead(200); // Встановлюємо статус код 200
-    res.end('My not first server');
-};
 
-// Створюємо та запускаємо сервер
-const server = http.createServer(requestListener);
-const host = options.host;
-const port = options.port;
+const { host, port, cache } = options; // Отримання параметрів
 
-server.listen(port, host, () => {
-    console.log(`Server is running on http://${host}:${port}`);
+// Створення сервера
+const server = http.createServer(async (req, res) => {
+  const urlParts = req.url.split('/');
+  const statusCode = urlParts[1]; // отримуємо код HTTP
+  const filePath = path.join(cache, `${statusCode}.jpg`);
+
+  try {
+    switch (req.method) {
+      case 'GET':
+        // Отримати картинку з кешу
+        await fs.access(filePath);
+        const imageData = await fs.readFile(filePath);
+        res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+        res.end(imageData);
+        break;
+
+      case 'PUT':
+        // Записати або замінити картинку в кеші
+        const data = [];
+        req.on('data', chunk => data.push(chunk));
+        req.on('end', async () => {
+          await fs.writeFile(filePath, Buffer.concat(data));
+          res.writeHead(201, { 'Content-Type': 'text/plain' });
+          res.end('Image saved successfully!');
+        });
+        break;
+
+      case 'DELETE':
+        // Видалити картинку з кешу
+        await fs.unlink(filePath);
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Image deleted successfully!');
+        break;
+
+      default:
+        // Метод не дозволено
+        res.writeHead(405, { 'Content-Type': 'text/plain' });
+        res.end('Method Not Allowed');
+        break;
+    }
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      // Картинку не знайдено
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+    } else {
+      // Інші помилки
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Internal Server Error');
+    }
+  }
 });
+
+// Запуск сервера
+server.listen(port, host, () => {
+  console.log(`Сервер запущено: http://${host}:${port}`);
+});
+
+
